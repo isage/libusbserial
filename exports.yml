@@ -1,0 +1,27 @@
+libusbserial:
+  attributes: 0
+  version:
+    major: 1
+    minor: 0
+  main:
+    start: module_start
+    stop: module_stop
+  libraries:
+    vile:
+      syscall: true
+      functions:
+        - libusbserial_start
+        - libusbserial_stop
+        - libusbserial_device_connected
+        - libusbserial_set_baudrate
+        - libusbserial_set_line_property
+        - libusbserial_write_data
+        - libusbserial_read_data
+        - libusbserial_tciflush
+        - libusbserial_tcoflush
+        - libusbserial_tcioflush
+        - libusbserial_setflowctrl
+        - libusbserial_setflowctrl_xonxoff
+        - libusbserial_setdtr_rts
+        - libusbserial_setdtr
+        - libusbserial_setrts
