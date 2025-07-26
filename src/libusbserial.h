@@ -67,6 +67,7 @@ extern "C"
 
   int libusbserial_write_data(const unsigned char *buf, int size);
   int libusbserial_read_data(unsigned char *buf, int size);
+  int libusbserial_read_data_blocking(unsigned char *buf, int size, SceUInt timeout);
 
   int libusbserial_tciflush();
   int libusbserial_tcoflush();

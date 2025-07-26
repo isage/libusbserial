@@ -51,18 +51,12 @@ typedef struct
   /** baudrate */
   int baudrate;
 
-  /** pointer to read buffer for read_data */
-  unsigned char readbuffer[4096] __attribute__((aligned(64)));
-  /** read buffer offset */
-  unsigned int readbuffer_offset;
-  /** number of remaining data in internal read buffer */
-  unsigned int readbuffer_remaining;
-  /** read buffer chunk size */
-  unsigned int readbuffer_chunksize;
+  unsigned char read_buffer[4096] __attribute__((aligned(64)));
 
   unsigned char writebuffer[4096] __attribute__((aligned(64)));
   /** write buffer chunk size */
   unsigned int writebuffer_chunksize;
+
   /** maximum packet size. Needed for filtering modem status bytes every n packets. */
   unsigned int max_packet_size;
 

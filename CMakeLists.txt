@@ -32,6 +32,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-rtti -fno-exceptions")
 
 add_executable(libusbserial
   src/devicelist.c
+  src/ringbuf.c
   src/main.c
   src/devices/ftdi.c
   src/devices/ch34x.c

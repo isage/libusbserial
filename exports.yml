@@ -17,6 +17,7 @@ libusbserial:
         - libusbserial_set_line_property
         - libusbserial_write_data
         - libusbserial_read_data
+        - libusbserial_read_data_blocking
         - libusbserial_tciflush
         - libusbserial_tcoflush
         - libusbserial_tcioflush

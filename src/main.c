@@ -22,6 +22,7 @@
 #include "devices/ftdi.h"
 #include "devices/ch34x.h"
 #include "serialdevice.h"
+#include "ringbuf.h"
 
 #include <psp2kern/kernel/cpu.h>
 #include <psp2kern/kernel/debug.h>
@@ -37,6 +38,8 @@
 #define EVF_SEND 1
 #define EVF_RECV 2
 #define EVF_CTRL 4
+
+#define MAX_RINGBUF_SIZE 0x1000
 
 SceUID transfer_ev;
 
@@ -69,9 +72,6 @@ static int _init_ctx()
   ctx.ftdi_type = TYPE_BM; /* chip type */
   ctx.baudrate  = 9600;
 
-  ctx.readbuffer_chunksize  = 4096;
-  ctx.readbuffer_offset     = 0;
-  ctx.readbuffer_remaining  = 0;
   ctx.writebuffer_chunksize = 4096;
   ctx.max_packet_size       = 64;
 
@@ -102,11 +102,20 @@ void _callback_send(int32_t result, int32_t count, void *arg)
   ksceKernelSetEventFlag(transfer_ev, EVF_SEND);
 }
 
+void usb_read(void);
 void _callback_recv(int32_t result, int32_t count, void *arg)
 {
   trace("recv cb result: %08x, count: %d\n", result, count);
-  *(int *)arg = count;
-  ksceKernelSetEventFlag(transfer_ev, EVF_RECV);
+
+  if (result == 0 && count > 0)
+  {
+    // filter FTDI
+    if (ctx.type == TYPE_FTDI && count > 2)
+        ringbuf_put_clobber(ctx.read_buffer+2, count-2);
+    else
+        ringbuf_put_clobber(ctx.read_buffer, count);
+  }
+  usb_read();
 }
 
 int _control_transfer(int rtype, int req, int val, int idx, void *data, int len)
@@ -141,22 +150,16 @@ int _send(unsigned char *request, unsigned int length)
   return transferred;
 }
 
-int _recv(unsigned char *result, unsigned int length)
+void usb_read()
 {
-  transferred = 0;
-  // transfer
-  trace("sending (recv) 0x%08x, len %d\n", result, length);
-  trace("sending (recv) pipe 0x%08x %d\n", ctx.in_pipe_id);
-  int ret = ksceUsbdBulkTransfer(ctx.in_pipe_id, result, length, _callback_recv, &transferred);
-  trace("send (recv) 0x%08x\n", ret);
-  if (ret < 0)
-    return ret;
-  // wait for eventflag
-  trace("waiting ef (recv)\n");
-  ksceKernelWaitEventFlag(transfer_ev, EVF_RECV, SCE_EVENT_WAITCLEAR_PAT | SCE_EVENT_WAITAND, NULL, 0);
-  return transferred;
-}
+  int ret = ksceUsbdBulkTransfer(ctx.in_pipe_id, ctx.read_buffer, ctx.max_packet_size, _callback_recv, NULL);
 
+  if (ret < 0)
+  {
+    ksceDebugPrintf("ksceUsbdInterruptTransfer(in) error: 0x%08x\n", ret);
+    // error out
+  }
+}
 
 /*
  *  Driver
@@ -305,8 +308,7 @@ int libusbserial_attach(int device_id)
       _ch34x_reset(&ctx);
     }
 
-    ctx.readbuffer_offset = 0;
-    ctx.readbuffer_remaining = 0;
+    ringbuf_reset();
 
     if (ctx.type == TYPE_FTDI)
     {
@@ -328,6 +330,7 @@ int libusbserial_attach(int device_id)
     if (ctx.out_pipe_id > 0 && ctx.in_pipe_id > 0 && ctx.control_pipe_id)
     {
       plugged = 1;
+      usb_read();
       return SCE_USBD_ATTACH_SUCCEEDED;
     }
   }
@@ -360,6 +363,12 @@ int libusbserial_start()
   // reset ctx
   _init_ctx();
 
+  if (ringbuf_init(MAX_RINGBUF_SIZE) < 0)
+  {
+      EXIT_SYSCALL(state);
+      return -1;
+  }
+
   started = 1;
   int ret = ksceUsbServMacSelect(2, 0);
 #ifdef NDEBUG
@@ -369,7 +378,8 @@ int libusbserial_start()
   ret = ksceUsbdRegisterDriver(&libusbserialDriver);
   trace("ksceUsbdRegisterDriver = 0x%08x\n", ret);
   EXIT_SYSCALL(state);
-  return 1;
+  if (ret < 0) return ret;
+  return 0;
 }
 
 int libusbserial_stop()
@@ -395,6 +405,8 @@ int libusbserial_stop()
   ksceKernelSetEventFlag(transfer_ev, EVF_CTRL);
   ksceKernelSetEventFlag(transfer_ev, EVF_SEND);
   ksceKernelSetEventFlag(transfer_ev, EVF_RECV);
+
+  ringbuf_term();
 
   EXIT_SYSCALL(state);
 
@@ -498,137 +510,59 @@ int libusbserial_write_data(const unsigned char *buf, int size)
   return offset;
 }
 
+int libusbserial_read_data_blocking(unsigned char *buf, int size, SceUInt timeout)
+{
+  uint32_t state;
+  unsigned char kbuf[64];
+  ENTER_SYSCALL(state);
+  int ret = -1;
+  int left = size;
+  int pos = 0;
+  while (left > 0)
+  {
+    if (left >= 64)
+      ret = ringbuf_get_wait(kbuf, 64, timeout);
+    else
+      ret = ringbuf_get_wait(kbuf, left, timeout);
+    if (ret > 0)
+      ksceKernelMemcpyKernelToUser(buf+pos, kbuf, ret);
+    else
+      break;
+
+    pos += ret;
+    left -= ret;
+  }
+  EXIT_SYSCALL(state);
+  return ret;
+
+}
+
 int libusbserial_read_data(unsigned char *buf, int size)
 {
-  int offset = 0, ret, i;
-  unsigned int num_of_chunks, chunk_remains;
-  unsigned int packet_size;
-  int actual_length = 1;
-
-  int skip = 0;
-  if (ctx.type == TYPE_FTDI) skip = 2;
-
   uint32_t state;
+  // we use small batches because we have small stack by default.
+  // TODO: do batch copy in ringbuf?
+  unsigned char kbuf[64];
   ENTER_SYSCALL(state);
-
-  if (!started || !plugged)
-    _error_return(-3, "USB device unavailable");
-
-  // Packet size sanity check (avoid division by zero)
-  packet_size = ctx.max_packet_size;
-  if (packet_size == 0)
+  int ret = -1;
+  int left = size;
+  int pos = 0;
+  while (left > 0)
   {
-    _error_return(-1, "bad packet size");
-    return -1;
+    if (left >= 64)
+      ret = ringbuf_get(kbuf, 64);
+    else
+      ret = ringbuf_get(kbuf, left);
+    if (ret > 0)
+      ksceKernelMemcpyKernelToUser(buf+pos, kbuf, ret);
+    else
+      break;
+
+    pos += ret;
+    left -= ret;
   }
-
-  // everything we want is still in the readbuffer?
-  if (size <= (int)ctx.readbuffer_remaining)
-  {
-    ksceKernelMemcpyKernelToUser(buf, ctx.readbuffer + ctx.readbuffer_offset, size);
-
-    // Fix offsets
-    ctx.readbuffer_remaining -= size;
-    ctx.readbuffer_offset += size;
-
-    EXIT_SYSCALL(state);
-
-    return size;
-  }
-  // something still in the readbuffer, but not enough to satisfy 'size'?
-  if (ctx.readbuffer_remaining != 0)
-  {
-    ksceKernelMemcpyKernelToUser(buf, ctx.readbuffer + ctx.readbuffer_offset, ctx.readbuffer_remaining);
-
-    // Fix offset
-    offset += ctx.readbuffer_remaining;
-  }
-  // do the actual USB read
-  while (offset < size && actual_length > 0)
-  {
-    ctx.readbuffer_remaining = 0;
-    ctx.readbuffer_offset    = 0;
-
-    /* returns how much received */
-    ret = _recv(ctx.readbuffer, ctx.readbuffer_chunksize);
-
-    if (ret < 0)
-    {
-      trace("recv failed: 0x%08x\n", ret);
-
-      EXIT_SYSCALL(state);
-      return ret;
-    }
-
-    actual_length = ret;
-
-    if (actual_length > skip)
-    {
-      // skip FTDI status bytes.
-      // Maybe stored in the future to enable modem use
-      num_of_chunks = actual_length / packet_size;
-      chunk_remains = (unsigned int)actual_length % packet_size;
-
-      ctx.readbuffer_offset += skip;
-      actual_length -= skip;
-
-      if (actual_length > packet_size - skip)
-      {
-        for (i = 1; i < num_of_chunks; i++)
-          memmove(ctx.readbuffer + ctx.readbuffer_offset + (packet_size - skip) * i,
-                  ctx.readbuffer + ctx.readbuffer_offset + packet_size * i, packet_size - skip);
-        if (chunk_remains > skip)
-        {
-          memmove(ctx.readbuffer + ctx.readbuffer_offset + (packet_size - skip) * i,
-                  ctx.readbuffer + ctx.readbuffer_offset + packet_size * i, chunk_remains - skip);
-          actual_length -= skip * num_of_chunks;
-        }
-        else
-          actual_length -= skip * (num_of_chunks - 1) + chunk_remains;
-      }
-    }
-    else if (actual_length <= skip)
-    {
-      // no more data to read?
-      EXIT_SYSCALL(state);
-      return offset;
-    }
-
-    if (actual_length > 0)
-    {
-      // data still fits in buf?
-      if (offset + actual_length <= size)
-      {
-        ksceKernelMemcpyKernelToUser(buf + offset, ctx.readbuffer + ctx.readbuffer_offset, actual_length);
-        // printf("buf[0] = %X, buf[1] = %X\n", buf[0], buf[1]);
-        offset += actual_length;
-
-        /* Did we read exactly the right amount of bytes? */
-        if (offset == size)
-        {
-          EXIT_SYSCALL(state);
-          return offset;
-        }
-      }
-      else
-      {
-        // only copy part of the data or size <= readbuffer_chunksize
-        int part_size = size - offset;
-        ksceKernelMemcpyKernelToUser(buf + offset, ctx.readbuffer + ctx.readbuffer_offset, part_size);
-
-        ctx.readbuffer_offset += part_size;
-        ctx.readbuffer_remaining = actual_length - part_size;
-        offset += part_size;
-
-        EXIT_SYSCALL(state);
-        return offset;
-      }
-    }
-  }
-  // never reached
-
   EXIT_SYSCALL(state);
-  return -127;
+  return ret;
 }
 
 int libusbserial_tciflush()
@@ -651,8 +585,7 @@ int libusbserial_tciflush()
   }
 
   // Invalidate data in the readbuffer
-  ctx.readbuffer_offset    = 0;
-  ctx.readbuffer_remaining = 0;
+  ringbuf_reset();
 
   EXIT_SYSCALL(state);
   return 0;
@@ -713,10 +646,8 @@ int libusbserial_tcioflush()
       _error_return(-2, "Purge of RX buffer failed");
   }
 
-
   // Invalidate data in the readbuffer
-  ctx.readbuffer_offset    = 0;
-  ctx.readbuffer_remaining = 0;
+  ringbuf_reset();
 
   EXIT_SYSCALL(state);
   return 0;
