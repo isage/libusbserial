@@ -252,3 +252,8 @@ int ringbuf_get_wait(unsigned char *c, int size, SceUInt timeout)
 done:
   return n_get;
 }
+
+int ringbuf_available()
+{
+    return idx(put_ptr) - idx(get_ptr);
+}

@@ -111,9 +111,13 @@ void _callback_recv(int32_t result, int32_t count, void *arg)
   {
     // filter FTDI
     if (ctx.type == TYPE_FTDI && count > 2)
+    {
         ringbuf_put_clobber(ctx.read_buffer+2, count-2);
-    else
+    }
+    else if (ctx.type != TYPE_FTDI)
+    {
         ringbuf_put_clobber(ctx.read_buffer, count);
+    }
   }
   usb_read();
 }
@@ -563,6 +567,11 @@ int libusbserial_read_data(unsigned char *buf, int size)
   }
   EXIT_SYSCALL(state);
   return ret;
+}
+
+int libusbserial_available_count()
+{
+    return ringbuf_available();
 }
 
 int libusbserial_tciflush()

@@ -18,6 +18,7 @@ libusbserial:
         - libusbserial_write_data
         - libusbserial_read_data
         - libusbserial_read_data_blocking
+        - libusbserial_available_count
         - libusbserial_tciflush
         - libusbserial_tcoflush
         - libusbserial_tcioflush

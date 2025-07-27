@@ -56,10 +56,10 @@ extern "C"
 {
 #endif
 
-  int libusbserial_start();
-  int libusbserial_stop();
+  int libusbserial_start(void);
+  int libusbserial_stop(void);
 
-  int libusbserial_device_connected();
+  int libusbserial_device_connected(void);
 
   int libusbserial_set_baudrate(int baudrate);
   int libusbserial_set_line_property(enum bits_type bits, enum stopbits_type sbit, enum parity_type parity,
@@ -68,10 +68,11 @@ extern "C"
   int libusbserial_write_data(const unsigned char *buf, int size);
   int libusbserial_read_data(unsigned char *buf, int size);
   int libusbserial_read_data_blocking(unsigned char *buf, int size, SceUInt timeout);
+  int libusbserial_available_count(void);
 
-  int libusbserial_tciflush();
-  int libusbserial_tcoflush();
-  int libusbserial_tcioflush();
+  int libusbserial_tciflush(void);
+  int libusbserial_tcoflush(void);
+  int libusbserial_tcioflush(void);
 
   /* flow control */
   int libusbserial_setflowctrl(int flowctrl);

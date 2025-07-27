@@ -63,11 +63,15 @@ int main(int argc, char *argv[])
 
     while(1)
     {
+        f = libusbserial_available_count();
+        if (f > 0)
+            sceClibPrintf("Available: %d\n", f);
+
         f = libusbserial_read_data(&buf, sizeof(buf));
 
         if(f > 0)
         {
-            sceClibPrintf("%c", buf);
+            sceClibPrintf("%c\n", buf);
         }
         else
         {

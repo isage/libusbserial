@@ -25,6 +25,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 int ringbuf_init(int size);
 int ringbuf_term(void);
 void ringbuf_reset(void);
+int ringbuf_available(void);
 
 int ringbuf_put(unsigned char *c, int size);
 int ringbuf_put_clobber(unsigned char *c, int size);
