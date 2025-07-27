@@ -551,22 +551,25 @@ int libusbserial_read_data(unsigned char *buf, int size)
   int ret = -1;
   int left = size;
   int pos = 0;
+  int total = 0;
   while (left > 0)
   {
     if (left >= 64)
       ret = ringbuf_get(kbuf, 64);
     else
       ret = ringbuf_get(kbuf, left);
+
     if (ret > 0)
       ksceKernelMemcpyKernelToUser(buf+pos, kbuf, ret);
     else
       break;
 
     pos += ret;
-    left -= ret;
+    left -= 64;
+    total += ret;
   }
   EXIT_SYSCALL(state);
-  return ret;
+  return total;
 }
 
 int libusbserial_available_count()
